@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "source": ".", // Firebase CLI will build Next.js and use the .next output directory
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "frameworksBackend": {
+      "region": "us-central1" // You can change this to your preferred region
+    }
+  }
+}

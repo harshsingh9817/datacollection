@@ -1,0 +1,12 @@
+# Settings to manage and configure a Firebase App Hosting backend.
+# https://firebase.google.com/docs/app-hosting/configure
+#
+# Note: This file is for Firebase App Hosting.
+# If you are deploying this Next.js application using Firebase Hosting's
+# framework-aware capabilities (as configured in firebase.json),
+# this apphosting.yaml file is not directly used for that deployment method.
+
+runConfig:
+  # Increase this value if you'd like to automatically spin up
+  # more instances in response to increased traffic.
+  maxInstances: 1
