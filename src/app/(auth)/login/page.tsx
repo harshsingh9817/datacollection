@@ -14,7 +14,7 @@ export default function LoginPage() {
         </div>
         <LoginForm />
          <p className="text-center text-sm text-muted-foreground">
-          Use <code className="bg-muted px-1 py-0.5 rounded">sunilkumarsingh817@gmail.com</code> / <code className="bg-muted px-1 py-0.5 rounded">8896As</code> to login as admin.
+          First <code className="bg-muted px-1 py-0.5 rounded">Take Login </code> And <code className="bg-muted px-1 py-0.5 rounded">Start</code> Your Work.
         </p>
         <p className="text-center text-sm text-muted-foreground">
           Don&apos;t have an account?{' '}
