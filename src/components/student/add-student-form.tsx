@@ -14,13 +14,12 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Calendar } from '@/components/ui/calendar';
+// Removed Popover and Calendar imports as they are no longer used for DOB
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { format, parse, isValid } from 'date-fns';
-import { CalendarIcon, User, Hash, Cake, HomeIcon as AddressHomeIcon, Phone, Loader2, ImageUp, Trash2, Users as UsersIcon } from 'lucide-react';
+import { format, parse, isValid, getYear, getMonth, getDate } from 'date-fns'; // Added getYear, getMonth, getDate
+import { User, Hash, HomeIcon as AddressHomeIcon, Phone, Loader2, ImageUp, Trash2, Users as UsersIcon, CalendarDays } from 'lucide-react'; // Replaced Cake with CalendarDays for icon
 import { useToast } from '@/hooks/use-toast';
 import type { Student, School } from '@/lib/types';
 import { DEFAULT_PLACEHOLDER_IMAGE_URL } from '@/lib/types';
@@ -32,19 +31,68 @@ import { uploadFileToAppwriteStorage, getAppwritePreviewUrl, deleteFileFromAppwr
 const MAX_FILE_SIZE_MB = 2;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
+// --- Zod Schema Changes for DOB ---
 const studentSchemaBase = z.object({
   name: z.string().min(2, { message: 'Student name must be at least 2 characters.' }).default(''),
   fatherName: z.string().min(2, { message: "Father's name must be at least 2 characters." }).default(''),
   className: z.string().min(1, { message: 'Please select a class.' }).default(''),
   rollNumber: z.string().min(1, { message: 'Roll number is required.' }).default(''),
-  dateOfBirth: z.date({ required_error: 'Date of birth is required.' }),
+  // DOB fields as strings
+  dobDay: z.string().min(1, { message: "Day is required."}),
+  dobMonth: z.string().min(1, { message: "Month is required."}),
+  dobYear: z.string().min(1, { message: "Year is required."}),
   address: z.string().min(5, { message: 'Address must be at least 5 characters.' }).default(''),
   contactNumber: z.string().regex(/^\+?[0-9\s-()]{7,20}$/, { message: 'Invalid contact number format.' }).default(''),
   schoolId: z.string().default(''),
   photoFile: z.custom<FileList>().optional(),
 });
 
-const studentSchema = studentSchemaBase.refine(
+const studentSchemaWithDateValidation = studentSchemaBase.superRefine((data, ctx) => {
+  const day = parseInt(data.dobDay, 10);
+  const month = parseInt(data.dobMonth, 10); // Month is 1-12 from select
+  const year = parseInt(data.dobYear, 10);
+
+  if (isNaN(day) || isNaN(month) || isNaN(year)) {
+    // Should ideally be caught by individual field string validation
+    // but good as a fallback.
+    if (isNaN(day)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid day.", path: ["dobDay"] });
+    if (isNaN(month)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid month.", path: ["dobMonth"] });
+    if (isNaN(year)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid year.", path: ["dobYear"] });
+    return z.NEVER; // Indicate validation failure
+  }
+
+  const date = new Date(year, month - 1, day); // JS month is 0-11
+
+  if (!isValid(date) || date.getFullYear() !== year || date.getMonth() !== (month - 1) || date.getDate() !== day) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.invalid_date,
+      message: "The selected day is not valid for the chosen month/year.",
+      path: ["dobDay"], // Associates error with the Day field primarily
+    });
+    return z.NEVER;
+  }
+
+  const today = new Date();
+  today.setHours(0,0,0,0); // Normalize today to midnight for comparison
+  if (date > today) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Date of birth cannot be in the future.", path: ["dobYear"] });
+    return z.NEVER;
+  }
+  if (date < new Date('1900-01-01')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Date of birth should not be before 1900.", path: ["dobYear"] });
+    return z.NEVER;
+  }
+}).transform(data => {
+    const day = parseInt(data.dobDay, 10);
+    const month = parseInt(data.dobMonth, 10);
+    const year = parseInt(data.dobYear, 10);
+    return {
+        ...data,
+        _validatedDateOfBirth: new Date(year, month - 1, day) // Store the validated Date object
+    };
+});
+
+const studentSchema = studentSchemaWithDateValidation.refine(
   (data) => {
     if (data.photoFile && data.photoFile.length > 0) {
       return data.photoFile[0].size <= MAX_FILE_SIZE_BYTES;
@@ -56,8 +104,24 @@ const studentSchema = studentSchemaBase.refine(
     path: ['photoFile'],
   }
 );
+// --- End of Zod Schema Changes ---
 
-type AddStudentFormValues = z.infer<typeof studentSchema>;
+type AddStudentFormInputValues = z.input<typeof studentSchemaWithDateValidation>; // For useForm's defaultValues and field types
+type AddStudentFormSubmitValues = z.output<typeof studentSchema>; // For onSubmit data type
+
+// --- Date Generation Utilities ---
+const currentYear = getYear(new Date());
+const years = Array.from({ length: 120 }, (_, i) => currentYear - i); // Up to 120 years back
+const months = [
+  { value: '1', label: 'January' }, { value: '2', label: 'February' },
+  { value: '3', label: 'March' }, { value: '4', label: 'April' },
+  { value: '5', label: 'May' }, { value: '6', label: 'June' },
+  { value: '7', label: 'July' }, { value: '8', label: 'August' },
+  { value: '9', label: 'September' }, { value: '10', label: 'October' },
+  { value: '11', label: 'November' }, { value: '12', label: 'December' },
+];
+const days = Array.from({ length: 31 }, (_, i) => i + 1);
+// --- End of Date Generation Utilities ---
 
 interface AddStudentFormProps {
   school: School;
@@ -84,14 +148,17 @@ export default function AddStudentForm({
 
   const defaultSelectedClass = classNameFixed || (availableClasses.length > 0 ? availableClasses[0] : '');
 
-  const form = useForm<AddStudentFormValues>({
-    resolver: zodResolver(studentSchema),
+  const form = useForm<AddStudentFormInputValues>({ // Use input type for form
+    resolver: zodResolver(studentSchema), // Final schema for full validation
     defaultValues: {
       name: '',
       fatherName: '',
       className: defaultSelectedClass,
       rollNumber: '',
-      dateOfBirth: undefined,
+      // DOB default values
+      dobDay: '',
+      dobMonth: '',
+      dobYear: '',
       address: '',
       contactNumber: '',
       schoolId: school?.id || '',
@@ -102,19 +169,28 @@ export default function AddStudentForm({
  useEffect(() => {
     const newStudentClassName = classNameFixed || (availableClasses.length > 0 ? availableClasses[0] : '');
     if (existingStudent) {
-      const dob = existingStudent.dateOfBirth && isValid(parse(existingStudent.dateOfBirth, 'yyyy-MM-dd', new Date()))
-                  ? parse(existingStudent.dateOfBirth, 'yyyy-MM-dd', new Date())
-                  : undefined;
+      let dobDay = '', dobMonth = '', dobYear = '';
+      if (existingStudent.dateOfBirth) {
+        const parsedDate = parse(existingStudent.dateOfBirth, 'yyyy-MM-dd', new Date());
+        if (isValid(parsedDate)) {
+          dobDay = String(getDate(parsedDate));
+          dobMonth = String(getMonth(parsedDate) + 1); // getMonth is 0-indexed
+          dobYear = String(getYear(parsedDate));
+        }
+      }
+
       form.reset({
         name: existingStudent.name || '',
         fatherName: existingStudent.fatherName || '',
         className: existingStudent.className || newStudentClassName,
         rollNumber: existingStudent.rollNumber || '',
+        dobDay,
+        dobMonth,
+        dobYear,
         address: existingStudent.address || '',
         contactNumber: existingStudent.contactNumber || '',
         schoolId: existingStudent.schoolId || school?.id || '',
-        dateOfBirth: dob,
-        photoFile: undefined, // Reset photoFile field on load
+        photoFile: undefined,
       });
       if (existingStudent.photoAppwriteId) {
         const previewUrl = getAppwritePreviewUrl(existingStudent.photoAppwriteId);
@@ -125,20 +201,18 @@ export default function AddStudentForm({
        if (existingStudent.className || newStudentClassName) {
         form.trigger('className');
       }
-    } else { // New student
+    } else {
        const resetValues = {
-          name: '',
-          fatherName: '',
+          name: '', fatherName: '',
           className: newStudentClassName,
           rollNumber: '',
-          dateOfBirth: undefined,
-          address: '',
-          contactNumber: '',
+          dobDay: '', dobMonth: '', dobYear: '', // Reset DOB fields
+          address: '', contactNumber: '',
           schoolId: school?.id || '',
           photoFile: undefined,
         };
         form.reset(resetValues);
-        if (newStudentClassName) { // If a class is auto-selected
+        if (newStudentClassName) {
           form.trigger('className');
         }
         setPhotoPreview(DEFAULT_PLACEHOLDER_IMAGE_URL);
@@ -147,6 +221,7 @@ export default function AddStudentForm({
 
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    // ... (file change logic remains the same)
     const file = event.target.files?.[0];
     if (file) {
       if (file.size > MAX_FILE_SIZE_BYTES) {
@@ -179,23 +254,22 @@ export default function AddStudentForm({
   };
 
   const handleRemovePhoto = async () => {
+    // ... (remove photo logic remains the same)
     setPhotoPreview(DEFAULT_PLACEHOLDER_IMAGE_URL);
     form.setValue('photoFile', undefined);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-    // The existingStudent.photoAppwriteId will be used by onSubmit to know if an old photo needs deletion
-    // if no new photoFile is provided.
   };
 
 
-  const onSubmit = async (data: AddStudentFormValues) => {
+  const onSubmit = async (data: AddStudentFormSubmitValues) => { // Use output type for submitted data
     const effectiveUserIdForOperation = isAdmin && targetUserId ? targetUserId : currentUser?.uid;
     if (!effectiveUserIdForOperation) {
       toast({ variant: "destructive", title: "User Error", description: "Cannot identify user for this operation." });
       return;
     }
-    if (!school || !school.id || !school.name) { // Ensure school.name is available for path construction
+    if (!school || !school.id || !school.name) {
         toast({ variant: "destructive", title: "School Data Missing", description: "School information (including name) is required to save the student." });
         return;
     }
@@ -204,12 +278,13 @@ export default function AddStudentForm({
     const photoFileToUpload = data.photoFile?.[0] || null;
 
     try {
+      // Use the _validatedDateOfBirth from the transformed Zod data
       const studentDataForDb: Omit<Student, 'id' | 'userId' | 'photoAppwriteId'> = {
         name: data.name,
         fatherName: data.fatherName,
         className: data.className,
         rollNumber: data.rollNumber,
-        dateOfBirth: format(data.dateOfBirth, 'yyyy-MM-dd'),
+        dateOfBirth: format(data._validatedDateOfBirth, 'yyyy-MM-dd'), // Use transformed date
         address: data.address,
         contactNumber: data.contactNumber,
         schoolId: school.id,
@@ -219,8 +294,8 @@ export default function AddStudentForm({
         await updateStudentInContext(
             { ...studentDataForDb, id: existingStudent.id, photoAppwriteId: existingStudent.photoAppwriteId },
             photoFileToUpload,
-            school.name, // Pass schoolNameForPath
-            data.className, // Pass classNameForPath - using current class from form
+            school.name,
+            data.className,
             existingStudent.photoAppwriteId,
             targetUserId
         );
@@ -232,8 +307,8 @@ export default function AddStudentForm({
         await addStudentToContext(
             studentDataForDb,
             photoFileToUpload,
-            school.name, // Pass schoolNameForPath
-            data.className, // Pass classNameForPath - using current class from form
+            school.name,
+            data.className,
             targetUserId
         );
         toast({
@@ -246,7 +321,9 @@ export default function AddStudentForm({
       form.reset({
         name: '', fatherName: '',
         className: resetClassName,
-        rollNumber: '', dateOfBirth: undefined, address: '', contactNumber: '',
+        rollNumber: '',
+        dobDay: '', dobMonth: '', dobYear: '', // Reset DOB fields
+        address: '', contactNumber: '',
         schoolId: school.id, photoFile: undefined,
       });
       if (resetClassName) form.trigger('className');
@@ -266,22 +343,17 @@ export default function AddStudentForm({
   };
 
   return (
-    // This div handles the scrolling behavior for the entire form.
-    // - max-h-[90vh]: Sets the maximum height to 90% of the viewport height.
-    // - overflow-auto: Adds a scrollbar automatically if the content exceeds this max height.
-    // - p-2 md:p-0: Adds small padding on mobile, no padding on medium screens and up (padding is handled by inner form).
-    // - w-full: Ensures the form container takes the full available width.
     <div className="max-h-[90vh] overflow-auto p-2 md:p-0 w-full">
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 py-4">
-          {/* Hidden schoolId field */}
           <FormField control={form.control} name="schoolId" render={({ field }) => <Input type="hidden" {...field} value={field.value || ''} />} />
 
-          {/* Left Column of Form Fields */}
+          {/* Left Column */}
           <div className="space-y-4">
               <FormField
               control={form.control}
               name="name"
+              // ... (Name field JSX unchanged)
               render={({ field }) => (
                   <FormItem>
                   <FormLabel>Student Name</FormLabel>
@@ -298,6 +370,7 @@ export default function AddStudentForm({
               <FormField
               control={form.control}
               name="fatherName"
+              // ... (FatherName field JSX unchanged)
               render={({ field }) => (
                   <FormItem>
                   <FormLabel>Father's Name</FormLabel>
@@ -314,6 +387,7 @@ export default function AddStudentForm({
               <FormField
               control={form.control}
               name="className"
+              // ... (ClassName field JSX unchanged)
               render={({ field }) => (
                   <FormItem>
                   <FormLabel>Class</FormLabel>
@@ -349,6 +423,7 @@ export default function AddStudentForm({
               <FormField
               control={form.control}
               name="rollNumber"
+              // ... (RollNumber field JSX unchanged)
               render={({ field }) => (
                   <FormItem>
                   <FormLabel>Roll Number</FormLabel>
@@ -364,49 +439,81 @@ export default function AddStudentForm({
               />
           </div>
 
-          {/* Right Column of Form Fields */}
+          {/* Right Column */}
           <div className="space-y-4">
-              <FormField
-              control={form.control}
-              name="dateOfBirth"
-              render={({ field }) => (
-                  <FormItem className="flex flex-col">
-                  <FormLabel>Date of Birth</FormLabel>
-                  <Popover>
-                      <PopoverTrigger asChild>
-                      <div className="relative">
-                          <CalendarIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground z-10" />
+             {/* --- Date of Birth Dropdowns --- */}
+              <FormItem> {/* Grouping DOB under one label conceptually */}
+                <FormLabel className="flex items-center">
+                  <CalendarDays className="mr-2 h-4 w-4 text-muted-foreground" />
+                  Date of Birth
+                </FormLabel>
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  <FormField
+                    control={form.control}
+                    name="dobDay"
+                    render={({ field }) => (
+                      <FormItem>
+                        <Select onValueChange={field.onChange} value={field.value} disabled={isSaving}>
                           <FormControl>
-                          <Button
-                              variant={'outline'}
-                              className={cn(
-                              'w-full pl-10 text-left font-normal',
-                              !field.value && 'text-muted-foreground'
-                              )}
-                              disabled={isSaving} type="button"
-                          >
-                              {field.value ? format(field.value, 'PPP') : <span>Pick a date</span>}
-                          </Button>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Day" />
+                            </SelectTrigger>
                           </FormControl>
-                      </div>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                          mode="single"
-                          selected={field.value}
-                          onSelect={field.onChange}
-                          disabled={(date) => date > new Date() || date < new Date('1900-01-01')}
-                          initialFocus
-                      />
-                      </PopoverContent>
-                  </Popover>
-                  <FormMessage />
-                  </FormItem>
-              )}
-              />
+                          <SelectContent>
+                            {days.map(d => <SelectItem key={d} value={String(d)}>{d}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage className="text-xs px-1"/> {/* Smaller message for tight layout */}
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="dobMonth"
+                    render={({ field }) => (
+                      <FormItem>
+                        <Select onValueChange={field.onChange} value={field.value} disabled={isSaving}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Month" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {months.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                         <FormMessage className="text-xs px-1"/>
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="dobYear"
+                    render={({ field }) => (
+                      <FormItem>
+                        <Select onValueChange={field.onChange} value={field.value} disabled={isSaving}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Year" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {years.map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                         <FormMessage className="text-xs px-1"/>
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                {/* General DOB error if needed, or rely on individual field messages */}
+              </FormItem>
+              {/* --- End of Date of Birth Dropdowns --- */}
+
               <FormField
               control={form.control}
               name="contactNumber"
+              // ... (ContactNumber field JSX unchanged)
               render={({ field }) => (
                   <FormItem>
                   <FormLabel>Contact Number</FormLabel>
@@ -423,6 +530,7 @@ export default function AddStudentForm({
               <FormField
               control={form.control}
               name="photoFile"
+              // ... (PhotoFile field JSX unchanged)
               render={() => (
                   <FormItem>
                     <FormLabel>Student Photo (Max {MAX_FILE_SIZE_MB}MB)</FormLabel>
@@ -465,12 +573,12 @@ export default function AddStudentForm({
               />
           </div>
 
-          {/* Address field spanning both columns on medium screens */}
           <FormField
             control={form.control}
             name="address"
+            // ... (Address field JSX unchanged)
             render={({ field }) => (
-              <FormItem className="md:col-span-2"> {/* Spans 2 columns on md+ */}
+              <FormItem className="md:col-span-2">
                 <FormLabel>Address</FormLabel>
                  <div className="relative">
                   <AddressHomeIcon className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -488,7 +596,6 @@ export default function AddStudentForm({
               </FormItem>
             )}
           />
-          {/* Submit button spanning both columns on medium screens */}
           <Button type="submit" className="w-full md:col-span-2 bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isSaving || form.formState.isSubmitting}>
             {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {isSaving ? 'Saving...' : (form.formState.isSubmitting ? 'Submitting...' : (existingStudent ? 'Update Student' : 'Save Student'))}
